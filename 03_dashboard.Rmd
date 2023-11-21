@@ -1,0 +1,158 @@
+---
+title: "Kroměříž - obsazenost parkovišť"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: 
+      version: 4
+      bootswatch: minty
+    orientation: rows
+    vertical_layout: scroll
+    social: menu
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(leaflet)
+library(curl)
+library(jsonlite)
+library(DT)
+library(rvest)
+library(tidygeocoder)
+
+kontrola_null <- function(x) {
+  ifelse(is_empty(x), NA, x)
+}
+
+```
+
+# Aktuální přehled {data-icon="fa-globe"}
+
+Row {data-height=120}
+-----------------------------------------------------------------------
+
+>Časoprostorová data
+
+Smysl tohoto dashboardu je ukázat možnosti R pro sběr časoprostorových dat na internetu. Prostředků, jimiž lze dosáhnout časoprostorových dat vhodných pro mapování současného města a jeho dynamických jevů není mnoho, a proto se jako jeden ze způsobů získání časoprostorových charakteristik nabízí využít digitální data ze zdrojů, které samy o sobě nemusí bezprostředně obsahovat data s geografickou informací a původně sloužily k jiným účelům (např. správné fakturaci služeb, podporu provozu informačního systému, či prevenci protiprávních činností). R je možné využít pro pokročilé možnosti Web scrapingu a web harvestingu, neboli jinými slovy - pomocí R je možné časoprostorová data na internetu sbírat, ukládat, dále zpracovávat a interaktivně vizualizovat.
+
+
+Row
+-----------------------------------------------------------------------
+
+### Poslední aktualizace
+
+```{r}
+
+actual_time <- Sys.time()
+valueBox(actual_time, icon = "fa-clock", color = "#FAFAFA")
+
+```
+
+Row
+-----------------------------------------------------------------------
+### Kroměříž - Parkovací dům
+
+```{r}
+kromeriz_html <- read_html("https://smart.mesto-kromeriz.cz/parkovaci-dum/")
+kromeriz_json <- fromJSON("https://smart.mesto-kromeriz.cz/parkovani.txt", flatten = TRUE)
+
+
+kromeriz_park_dum <- data.frame("timeStamp" = Sys.time(),
+                      "deviceName" = kromeriz_html %>%
+                        html_nodes(xpath = '//*[@id="post-86"]/h1') %>%
+                        html_text() %>%
+                        kontrola_null(),
+                      "data.total" = kromeriz_json[["celkem"]] %>%
+                        kontrola_null(),
+                      "data.free" = kromeriz_json[["volno"]] %>%
+                        kontrola_null(),
+                      "data.occupied" = kromeriz_json[["obsazeno"]] %>%
+                        kontrola_null())
+
+gauge(kromeriz_park_dum$data.free, min = 0, max = kromeriz_park_dum$data.total, abbreviate = FALSE, 
+      gaugeSectors(success = c(0, kromeriz_park_dum$data.total/100*75), 
+                   warning = c(kromeriz_park_dum$data.total/100*75.01, kromeriz_park_dum$data.total/100*90),
+                   danger = c(kromeriz_park_dum$data.total/100*90.01, kromeriz_park_dum$data.total),
+                   colors = c("#4CBB17", "#FF7800", "#E60000")
+  ))
+
+```
+
+### Kroměříž - Náměstí
+
+```{r}
+kromeriz_namesti_json <- fromJSON("https://smart.mesto-kromeriz.cz/wp-content/themes/Divi/data.php", flatten = TRUE)
+
+
+kromeriz_namesti <- data.frame("timeStamp" = Sys.time(),
+                      "deviceName" = kromeriz_namesti_json[["status_reply"]][["status_reply"]][["name"]] %>%
+                        kontrola_null(),
+                      "data.total" = nrow(kromeriz_namesti_json$status_reply$status_reply$lots) %>%
+                        kontrola_null(),
+                      "data.free" = (nrow(kromeriz_namesti_json$status_reply$status_reply$lots) - sum(kromeriz_namesti_json$status_reply$status_reply$lot$state == "occupied")) %>%
+                        kontrola_null(),
+                      "data.occupied" = sum(kromeriz_namesti_json$status_reply$status_reply$lot$state == "occupied") %>%
+                        kontrola_null())
+
+
+gauge(kromeriz_namesti$data.free, min = 0, max = kromeriz_namesti$data.total, abbreviate = FALSE, 
+      gaugeSectors(success = c(0, kromeriz_namesti$data.total/100*75), 
+                   warning = c(kromeriz_namesti$data.total/100*75.01, kromeriz_namesti$data.total/100*90),
+                   danger = c(kromeriz_namesti$data.total/100*90.01, kromeriz_namesti$data.total),
+                   colors = c("#4CBB17", "#FF7800", "#E60000")
+  ))
+
+```
+
+Row {data-height=90}
+-----------------------------------------------------------------------
+>Geokódování
+
+R lze využití také ke geokodování, procesu přeměny infromace jako je adresa nebo název místa, a vrácení zeměpisných souřadnic (zeměpisná šířka / délka), k identifikaci místa na povrchu Země. Uvedený příklad z jména prodejny za pomoci geokodovací služby Nominatim získá souřadnice pro vizualizaci parkovišť na mapě.
+
+```{r}
+#input addresses
+parkoviste_tabulka <- data.frame(address = c("Havlíčkova 505, Kroměříž", "Velké náměstí, Kroměříž"))
+
+parkoviste_tabulka_s_adresy <- parkoviste_tabulka %>%
+  tidygeocoder::geocode(address, method = 'osm', lat = lat, long = lon, full_results = TRUE)
+
+```
+
+Row {data-height=300}
+-----------------------------------------------------------------------
+
+
+### Seznam parkovišť v Kroměříži - dle geokodování
+
+```{r}
+datatable(parkoviste_tabulka_s_adresy, options = list(
+  dom = 't',
+  scrollY = 300))
+
+```
+
+Row {data-height=400}
+-----------------------------------------------------------------------
+
+### Lokalizace
+
+```{r}
+
+icons <- awesomeIcons(
+  icon = "glyphicon-scale",
+  markerColor = "black"
+)
+
+mapa <- leaflet(parkoviste_tabulka_s_adresy) %>% 
+    addAwesomeMarkers(~lon, ~lat, icon=icons, popup = parkoviste_tabulka_s_adresy$address) %>%
+    addWMSTiles(
+    "https://geoportal.cuzk.cz/WMS_ZM10_PUB/WMService.aspx",
+    layers = "GR_ZM10",
+    options = WMSTileOptions(format = "image/png"),
+    attribution = "© 2020 ČÚZK"
+  )
+
+mapa
+
+```
